@@ -1,0 +1,5 @@
+transformers
+torch
+pycountry
+nltk
+requests

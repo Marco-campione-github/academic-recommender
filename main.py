@@ -18,8 +18,8 @@ While step 1 relies on step 2, both steps should not be run together, as model t
 """
 
 # Install
-!pip install transformers
-!pip install pycountry
+#!pip install transformers
+#!pip install pycountry
 
 # Imports
 import requests
@@ -27,10 +27,15 @@ from transformers import pipeline
 import nltk
 from nltk.corpus import stopwords
 import pycountry
-from typing import List, Dict
+from typing import List, Dict, Union
+import streamlit as st
 
-nltk.download('punkt')
-nltk.download('stopwords')
+
+@st.cache_resource
+def load_model():
+    model = pipeline("question-answering", "timpal0l/mdeberta-v3-base-squad2")
+    st.success("Loaded NLP model from Hugging Face!")  # 👈 Show a success message
+    return model
 
 def anwser_question(context:str, question:str):
   '''
@@ -41,7 +46,9 @@ def anwser_question(context:str, question:str):
 
   :param question: The question to be asked to the model about the query of the user.
   '''
-  qa_model = pipeline("question-answering", "timpal0l/mdeberta-v3-base-squad2")
+
+  qa_model = load_model()
+
   split_context = nltk.sent_tokenize(context)
 
   answers = []
@@ -115,7 +122,7 @@ def get_concepts(topic:str):
   concepts = [dict(zip(keys, [result[key] for key in keys])) for result in results]
   return concepts
 
-def get_authors(concepts: List[Dict], country_code: str | None):
+def get_authors(concepts: List[Dict[str, str]], country_code: Union[str, None]):
   '''
   Builds a list of 100 authors that belong to one of the specified concepts and
   to the country code by querying openAlex
@@ -148,6 +155,7 @@ def get_authors(concepts: List[Dict], country_code: str | None):
       author['2yr_mean_citedness'] = a['summary_stats']['2yr_mean_citedness']
       lki = a.get('last_known_institution', None)
       if lki is not None:
+
         country_code_string = ""
         country_code = lki['country_code']
         if country_code is not None:
@@ -172,51 +180,83 @@ def convert_location_to_alpha2(countries):
   filtered_codes = [code.alpha_2 for code in codes if code is not None]
   return filtered_codes if len(filtered_codes) > 0 else [None]
 
+
 def print_authors(authors, country_code):
-  '''
+  """
   Prints the country_code and the given authors nicely to the console.
   Uses some basic formatting to achieve nice looking results.
 
   :param authors: list of dictionaries describing authors
   :param country_code: code of a country (e.g. 'DE'), can be None
-  '''
+  """
   if country_code is not None:
-    print(f"\nIn {pycountry.countries.get(alpha_2=country_code).name}:")
+    st.text(f"\nIn {pycountry.countries.get(alpha_2=country_code).name}:")
 
   for author in authors:
-    print(f"\n{author['display_name']} - {author['association']}")
-    print("   • Avg number of citations last 2yrs: ", author['2yr_mean_citedness'])
-    print("   • Number of works: ", author['works_count'])
-    print("   • Number of citations: ", author['cited_by_count'])
-    print("   • Citing score: ", author['citing_score'])
+    output = f"""
+    {author['display_name']} - {author['association']}
+    - Avg number of citations last 2yrs: {author['2yr_mean_citedness']}
+    - Number of works: {author['works_count']}
+    - Number of citations: {author['cited_by_count']}
+    - Citing score: {author['citing_score']}
+    """
+    st.markdown(output)
 
-# extract topics from the user input query
-topics, locations = extract_information("I'm interested in Computer Science and Botanic in France, Germany and Italy")
-print("The inferred topics are:", ", ".join(topics))
-if len(locations) > 0:
-  print("The inferred locations are:", ", ".join(locations))
 
-# if no topics are inferred, we abort
-if len(topics) != 0:
+def run_recommender(input):
+    nltk.download('punkt')
+    nltk.download('stopwords')
 
-  for topic in topics:
-    # get concepts based on topics
-    concepts = get_concepts(topic)
+    # extract topics from the user input query
+    topics, locations = extract_information(input)
+    st.text(f"The inferred topics are: {', '.join(topics)}")
+    if len(locations) > 0:
+      st.text(f"The inferred locations are: {', '.join(locations)}")
 
-    # get country_codes based on inferred locations
-    # to ensure the below for loop runs once when no locations are specified,
-    # convert_location_to_alpha2 returns [None] when locations are empty.
-    country_codes = convert_location_to_alpha2(locations)
+    # if no topics are inferred, we abort
+    if len(topics) != 0:
 
-    if len(locations) > 0 and not any(country_codes):
-      print("We could not derive a location from your input, try to rephrase it :)")
+      for topic in topics:
+        # get concepts based on topics
+        concepts = get_concepts(topic)
 
-    print(f'Results for the topic: "{topic}"')
-    for country_code in country_codes:
-      # get authors for the first 5 concepts and the country code
-      authors = get_authors(concepts[:5], country_code)
-      # print first 5 authors and the country code
-      print_authors(authors[:5], country_code)
-      print('\n\n')
-else:
-  print("No topics found!")
+        # get country_codes based on inferred locations
+        # to ensure the below for loop runs once when no locations are specified,
+        # convert_location_to_alpha2 returns [None] when locations are empty.
+        country_codes = convert_location_to_alpha2(locations)
+        if len(locations) > 0 and not any(country_codes):
+          st.text("We could not derive a location from your input, try to rephrase it :)")
+        st.text(f'Results for the topic: "{topic}"')
+        for country_code in country_codes:
+          # get authors for the first 5 concepts and the country code
+          authors = get_authors(concepts[:5], country_code)
+          # print first 5 authors and the country code
+          print_authors(authors[:5], country_code)
+          print('\n\n')
+    else:
+      st.text("No topics found!")
+
+
+st.markdown("""
+  ### Academic Recommender
+
+  Academic recommender is a system that suggests scientific researchers
+  based on your research interests and location.
+
+  To use it, simply input what you are interested in and get results.
+  We currently support scientific fields and countries as locations.
+
+  Example: I am interested in Computer Science in Germany.
+
+  For each topic and location combination, it returns 5 researchers,
+  ranked by the number of citations in the last 2 years.
+  This tool is powered by OpenAlex.
+
+  Please help us by filling out [this form after using the system](https://docs.google.com/forms/d/e/1FAIpQLSeVGkPnEmbCR3ZdgDvegpXz1fVfgMFjObzEd1jrJWDTboJYJA/viewform?usp=sf_link), thank you!
+  """)
+
+
+text_input = st.text_input("What are you interested in?")
+
+if text_input:
+    run_recommender(text_input)
